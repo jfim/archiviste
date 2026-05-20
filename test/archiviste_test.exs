@@ -236,7 +236,12 @@ defmodule ArchivisteTest do
     b = WarcFixture.record(type: "response", payload: "second")
     bytes = a <> b
 
-    path = Path.join(System.tmp_dir!(), "archiviste_test_at_#{System.unique_integer([:positive])}.warc")
+    path =
+      Path.join(
+        System.tmp_dir!(),
+        "archiviste_test_at_#{System.unique_integer([:positive])}.warc"
+      )
+
     File.write!(path, bytes)
 
     try do
@@ -257,7 +262,10 @@ defmodule ArchivisteTest do
     bytes = a_gz <> b_gz
 
     path =
-      Path.join(System.tmp_dir!(), "archiviste_test_at_#{System.unique_integer([:positive])}.warc.gz")
+      Path.join(
+        System.tmp_dir!(),
+        "archiviste_test_at_#{System.unique_integer([:positive])}.warc.gz"
+      )
 
     File.write!(path, bytes)
 
