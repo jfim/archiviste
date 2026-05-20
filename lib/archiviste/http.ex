@@ -162,18 +162,21 @@ defmodule Archiviste.HTTP do
   defp parse_response_head(head) do
     [status_line | header_lines] = split_head(head)
 
-    case String.split(status_line, " ", parts: 3) do
-      [version, code_str, reason] ->
-        case Integer.parse(code_str) do
-          {code, ""} ->
-            {:ok, %{version: version, status: code, reason: reason}, parse_headers(header_lines)}
+    parts =
+      case String.split(status_line, " ", parts: 3) do
+        [version, code_str, reason] -> {version, code_str, reason}
+        # Some servers/proxies emit `HTTP/1.1 200\r\n` without the trailing
+        # SP that RFC 7230 mandates before an (empty) reason phrase. Accept
+        # it — real-world parsers (curl, Mint, Finch) all do.
+        [version, code_str] -> {version, code_str, ""}
+        _ -> :error
+      end
 
-          _ ->
-            {:error, {:bad_status_line, status_line}}
-        end
-
-      _ ->
-        {:error, {:bad_status_line, status_line}}
+    with {version, code_str, reason} <- parts,
+         {code, ""} <- Integer.parse(code_str) do
+      {:ok, %{version: version, status: code, reason: reason}, parse_headers(header_lines)}
+    else
+      _ -> {:error, {:bad_status_line, status_line}}
     end
   end
 
