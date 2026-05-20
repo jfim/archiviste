@@ -69,8 +69,19 @@ defmodule Archiviste do
   """
   @spec stream_file!(Path.t(), opts()) :: Enumerable.t()
   def stream_file!(path, opts \\ []) when is_binary(path) do
-    path
-    |> File.stream!([], 64 * 1024)
+    raw = File.stream!(path, [], 64 * 1024)
+
+    raw
+    |> maybe_gunzip(path)
     |> stream!(opts)
+  end
+
+  defp maybe_gunzip(stream, path) do
+    if gzip?(path), do: Archiviste.Gzip.decode_stream(stream), else: stream
+  end
+
+  defp gzip?(path) do
+    String.ends_with?(path, ".gz") or
+      match?({:ok, <<0x1F, 0x8B>>}, File.open(path, [:read, :binary], &IO.binread(&1, 2)))
   end
 end

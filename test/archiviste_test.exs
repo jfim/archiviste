@@ -81,4 +81,58 @@ defmodule ArchivisteTest do
       File.rm(path)
     end
   end
+
+  test "stream_file!/2 auto-detects per-record gzip from .gz extension" do
+    members =
+      WarcFixture.gzip_each([
+        WarcFixture.record(type: "warcinfo", payload: "first"),
+        WarcFixture.record(type: "response", payload: "second")
+      ])
+
+    path =
+      Path.join(
+        System.tmp_dir!(),
+        "archiviste_test_#{System.unique_integer([:positive])}.warc.gz"
+      )
+
+    File.write!(path, members)
+
+    try do
+      records =
+        path
+        |> Archiviste.stream_file!()
+        |> Stream.map(fn r -> %{r | payload: [Archiviste.Record.read_payload(r)]} end)
+        |> Enum.to_list()
+
+      assert Enum.map(records, & &1.type) == [:warcinfo, :response]
+      assert Enum.map(records, &Archiviste.Record.read_payload/1) == ["first", "second"]
+    after
+      File.rm(path)
+    end
+  end
+
+  test "stream_file!/2 auto-detects gzip from magic bytes when extension is plain" do
+    members =
+      WarcFixture.gzip_each([
+        WarcFixture.record(type: "warcinfo", payload: "magic")
+      ])
+
+    path =
+      Path.join(System.tmp_dir!(), "archiviste_test_#{System.unique_integer([:positive])}.warc")
+
+    File.write!(path, members)
+
+    try do
+      records =
+        path
+        |> Archiviste.stream_file!()
+        |> Stream.map(fn r -> %{r | payload: [Archiviste.Record.read_payload(r)]} end)
+        |> Enum.to_list()
+
+      assert Enum.map(records, & &1.type) == [:warcinfo]
+      assert Enum.map(records, &Archiviste.Record.read_payload/1) == ["magic"]
+    after
+      File.rm(path)
+    end
+  end
 end
