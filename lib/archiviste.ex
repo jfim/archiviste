@@ -11,9 +11,10 @@ defmodule Archiviste do
       |> Stream.take(10)
       |> Enum.to_list()
 
-  Each record is an `Archiviste.Record` whose `:payload` is a lazy
-  `Stream.t()` of binary chunks. See `Archiviste.Record` for details
-  on the payload contract.
+  Each record is an `Archiviste.Record` whose `:payload` is an
+  `Enumerable.t()` of binary chunks (fully materialized — safe to consume
+  after the outer stream ends). See `Archiviste.Record` for details on the
+  payload contract.
 
   For HTTP-level parsing of `response` and `request` records, see
   `Archiviste.HTTP`.
@@ -40,10 +41,10 @@ defmodule Archiviste do
 
   This is the core API. For files, see `stream_file!/2`.
 
-  Each yielded `Archiviste.Record`'s `:payload` is a lazy `Stream.t()` of
-  binary chunks. Its lifetime is bounded by this outer stream — consume
-  payloads inside the pipeline (e.g., with `Stream.map`) before exhausting
-  the outer stream with `Enum.to_list/1` or similar.
+  Each yielded `Archiviste.Record`'s `:payload` is an `Enumerable.t()` of
+  binary chunks, fully materialized in memory by the time the record is
+  yielded. Payloads remain consumable after the outer stream has been
+  exhausted (e.g., via `Enum.to_list/1` or `Stream.take/2`).
 
   ## Options
 
