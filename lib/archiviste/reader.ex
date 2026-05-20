@@ -33,13 +33,22 @@ defmodule Archiviste.Reader do
 
   def eof?(pid), do: GenServer.call(pid, :eof?, :infinity)
 
+  def set_pending_skip(pid, n) when is_integer(n) and n >= 0,
+    do: GenServer.call(pid, {:set_pending_skip, n}, :infinity)
+
+  def consume_pending_skip(pid, delta) when is_integer(delta) and delta >= 0,
+    do: GenServer.call(pid, {:consume_pending_skip, delta}, :infinity)
+
+  def drain_pending(pid),
+    do: GenServer.call(pid, :drain_pending, :infinity)
+
   def close(pid), do: GenServer.stop(pid)
 
   ## Server
 
   defmodule State do
     @moduledoc false
-    defstruct [:cont, :buffer, :offset, :eof]
+    defstruct [:cont, :buffer, :offset, :eof, pending_skip: 0]
   end
 
   @impl true
@@ -87,6 +96,22 @@ defmodule Archiviste.Reader do
 
   def handle_call(:eof?, _from, state),
     do: {:reply, state.eof and state.buffer == <<>>, state}
+
+  def handle_call({:set_pending_skip, n}, _from, state),
+    do: {:reply, :ok, %{state | pending_skip: n}}
+
+  def handle_call({:consume_pending_skip, delta}, _from, state) do
+    new = max(state.pending_skip - delta, 0)
+    {:reply, :ok, %{state | pending_skip: new}}
+  end
+
+  def handle_call(:drain_pending, _from, %{pending_skip: 0} = state),
+    do: {:reply, :ok, state}
+
+  def handle_call(:drain_pending, _from, state) do
+    {result, state} = do_skip(state, state.pending_skip)
+    {:reply, result, %{state | pending_skip: 0}}
+  end
 
   ## Internals
 

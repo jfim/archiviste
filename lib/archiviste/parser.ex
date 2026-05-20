@@ -15,9 +15,7 @@ defmodule Archiviste.Parser do
     * `{:error, reason, offset}` — malformed record at byte offset
   """
   def next_record(reader_pid) do
-    # If a previous record's payload wasn't fully consumed, the caller is
-    # expected to have called `drain_pending/1` before this. For the initial
-    # call there is no pending payload.
+    :ok = drain_or_warn(reader_pid)
     offset = Reader.offset(reader_pid)
 
     case Reader.peek(reader_pid, 1) do
@@ -146,23 +144,41 @@ defmodule Archiviste.Parser do
 
   ## Payload + trailer
 
+  defp drain_or_warn(reader_pid) do
+    case Reader.drain_pending(reader_pid) do
+      :ok -> :ok
+      :eof -> :ok
+    end
+  end
+
   defp build_payload_stream(reader, content_length) do
+    # Tell the reader how many bytes belong to the next record's payload +
+    # trailing CRLF CRLF, so that if the caller doesn't consume the payload
+    # we can drain it later.
+    :ok = Reader.set_pending_skip(reader, content_length + 4)
     chunk_size = 64 * 1024
 
     Stream.resource(
       fn -> content_length end,
       fn
         0 ->
-          # Consume the trailing CRLF CRLF that follows every record.
-          _ = Reader.read(reader, 4)
+          case Reader.read(reader, 4) do
+            {:ok, _} -> :ok = Reader.consume_pending_skip(reader, 4)
+            :eof -> :ok
+          end
+
           {:halt, 0}
 
         remaining ->
           n = min(chunk_size, remaining)
 
           case Reader.read(reader, n) do
-            {:ok, bytes} -> {[bytes], remaining - n}
-            :eof -> {:halt, remaining}
+            {:ok, bytes} ->
+              :ok = Reader.consume_pending_skip(reader, n)
+              {[bytes], remaining - n}
+
+            :eof ->
+              {:halt, remaining}
           end
       end,
       fn _ -> :ok end

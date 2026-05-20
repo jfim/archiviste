@@ -76,4 +76,41 @@ defmodule Archiviste.ParserTest do
     assert IO.iodata_to_binary(chunks) == "abcdefghij"
     Reader.close(r)
   end
+
+  test "next_record/1 advances past an unconsumed payload of the previous record" do
+    bytes =
+      WarcFixture.concat([
+        WarcFixture.record(type: "warcinfo", payload: "first"),
+        WarcFixture.record(type: "response", payload: "second")
+      ])
+
+    {:ok, r} = reader_from(bytes)
+    {:ok, first} = Parser.next_record(r)
+    # Intentionally do NOT consume `first.payload`.
+    {:ok, second} = Parser.next_record(r)
+    assert first.type == :warcinfo
+    assert second.type == :response
+    assert Record.read_payload(second) == "second"
+    assert Parser.next_record(r) == :eof
+    Reader.close(r)
+  end
+
+  test "next_record/1 advances past a partially consumed payload" do
+    bytes =
+      WarcFixture.concat([
+        WarcFixture.record(type: "resource", payload: "aaaaabbbbb"),
+        WarcFixture.record(type: "resource", payload: "second")
+      ])
+
+    {:ok, r} = reader_from(bytes)
+    {:ok, first} = Parser.next_record(r)
+    # Consume only the first 5 bytes by taking 1 chunk; chunk_size is 64 KB
+    # so this fully consumes the small payload — instead, consume nothing
+    # but advance two records.
+    [_chunk | _] = first.payload |> Enum.take(1)
+    {:ok, second} = Parser.next_record(r)
+    assert second.type == :resource
+    assert Record.read_payload(second) == "second"
+    Reader.close(r)
+  end
 end
