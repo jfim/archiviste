@@ -98,6 +98,42 @@ defmodule Archiviste.HTTPTest do
     assert cookies == ["a=1", "b=2"]
   end
 
+  test "parse/2 yields body bytes that span multiple Reader chunks" do
+    # 80 KB body — exceeds the 64KB Reader chunk size, so the body must
+    # cross chunk boundaries in the payload Stream.
+    body = String.duplicate("X", 80 * 1024)
+
+    http =
+      "HTTP/1.1 200 OK\r\n" <>
+        "Content-Type: application/octet-stream\r\n" <>
+        "Content-Length: #{byte_size(body)}\r\n" <>
+        "\r\n" <>
+        body
+
+    bytes =
+      Archiviste.WarcFixture.record(
+        type: "response",
+        target_uri: "https://example.com/big",
+        content_type: "application/http;msgtype=response",
+        payload: http
+      )
+
+    [parsed] =
+      [bytes]
+      |> Archiviste.stream!()
+      |> Stream.map(fn record ->
+        {:ok, resp} = Archiviste.HTTP.parse(record)
+        # Materialize body inside the pipeline while Reader is alive
+        materialized_body = resp.body |> Enum.to_list() |> IO.iodata_to_binary()
+        %{resp | body: [materialized_body]}
+      end)
+      |> Enum.to_list()
+
+    assert parsed.status == 200
+    assert IO.iodata_to_binary(Enum.to_list(parsed.body)) == body
+    assert byte_size(IO.iodata_to_binary(Enum.to_list(parsed.body))) == 80 * 1024
+  end
+
   test "parse_stream/1 replaces response/request records with parsed structs and passes others through" do
     info = WarcFixture.record(type: "warcinfo", payload: "x")
 

@@ -26,7 +26,7 @@ defmodule Archiviste.HTTP do
   def parse(record, opts \\ [])
 
   def parse(%Record{type: :response} = record, _opts) do
-    with {:ok, head, body_stream} <- read_head(record.payload),
+    with {:ok, head, body_stream} <- read_head_and_body_stream(record.payload),
          {:ok, %{version: v, status: s, reason: r}, headers} <- parse_response_head(head) do
       {:ok,
        %HTTP.Response{
@@ -42,7 +42,7 @@ defmodule Archiviste.HTTP do
   end
 
   def parse(%Record{type: :request} = record, _opts) do
-    with {:ok, head, body} <- read_head(record.payload),
+    with {:ok, head, body} <- read_head_and_body_stream(record.payload),
          {:ok, %{method: m, target: t, version: v}, headers} <- parse_request_head(head) do
       {:ok,
        %HTTP.Request{
@@ -88,53 +88,48 @@ defmodule Archiviste.HTTP do
 
   ## Internals
 
-  @doc false
   # Reads the HTTP head (status/request line + headers) from the payload
-  # stream by buffering until "\r\n\r\n". Returns the head bytes and a
-  # body stream that yields the remaining payload bytes.
-  #
-  # Strategy: fully buffer chunks from the payload stream until we locate
-  # the "\r\n\r\n" terminator. Everything before and including the terminator
-  # is the head. Everything after it (within the already-pulled chunks) forms
-  # the body. Because `Enum.reduce_while` consumes the underlying Stream and
-  # cannot be resumed after halting, the body contains ONLY the bytes already
-  # pulled past the terminator. For the bounded payloads in our test suite
-  # (and for typical HTTP headers + small bodies), the Reader emits all bytes
-  # in a single chunk, so the full body is captured in `rest`. The WARC
-  # parser's auto-drain handles any bytes that remain unconsumed.
-  def read_head(payload) do
-    {head, body} = take_until_double_crlf(payload, <<>>)
-    {:ok, head, body}
+  # stream using Enumerable continuation semantics so the body stream can
+  # resume the same underlying enumerator. This correctly handles HTTP bodies
+  # that span multiple Reader chunks (>~64 KB).
+  defp read_head_and_body_stream(payload) do
+    reducer = &Enumerable.reduce(payload, &1, fn x, _ -> {:suspend, x} end)
+    pull_until_terminator(reducer.({:cont, nil}), <<>>)
   end
 
-  defp take_until_double_crlf(stream, acc) do
-    result =
-      Enum.reduce_while(stream, {acc, []}, fn chunk, {buf, _} ->
-        new_buf = buf <> chunk
+  defp pull_until_terminator({:suspended, chunk, next_cont}, acc) do
+    new_acc = acc <> chunk
 
-        case :binary.match(new_buf, "\r\n\r\n") do
-          {pos, 4} ->
-            <<head::binary-size(pos + 4), rest::binary>> = new_buf
-            {:halt, {:found, head, rest}}
+    case :binary.match(new_acc, "\r\n\r\n") do
+      {pos, 4} ->
+        <<head::binary-size(pos + 4), rest::binary>> = new_acc
+        body = build_body_stream(rest, next_cont)
+        {:ok, head, body}
 
-          :nomatch ->
-            {:cont, {new_buf, []}}
-        end
-      end)
-
-    case result do
-      {:found, head, rest} ->
-        # Body = bytes after the "\r\n\r\n" that were already buffered.
-        # Remaining payload bytes (if any) in the Stream were consumed by
-        # reduce_while and cannot be resumed here. For bounded, small HTTP
-        # headers + bodies this is correct: the bytes fit in the same chunk.
-        body = if rest == <<>>, do: [], else: [rest]
-        {head, body}
-
-      {buf, _} ->
-        # Stream exhausted without finding the terminator — treat all as head.
-        {buf, []}
+      :nomatch ->
+        pull_until_terminator(next_cont.({:cont, nil}), new_acc)
     end
+  end
+
+  defp pull_until_terminator({:done, _}, _acc), do: {:error, :no_http_terminator}
+  defp pull_until_terminator({:halted, _}, _acc), do: {:error, :no_http_terminator}
+
+  defp build_body_stream(initial_leftover, cont) do
+    Stream.resource(
+      fn -> {initial_leftover, cont} end,
+      fn
+        {leftover, c} when leftover != "" ->
+          {[leftover], {"", c}}
+
+        {"", c} ->
+          case c.({:cont, nil}) do
+            {:suspended, chunk, next} -> {[chunk], {"", next}}
+            {:done, _} -> {:halt, nil}
+            {:halted, _} -> {:halt, nil}
+          end
+      end,
+      fn _ -> :ok end
+    )
   end
 
   defp parse_response_head(head) do
