@@ -77,8 +77,11 @@ defmodule Archiviste.MixProject do
   defp package do
     [
       licenses: ["Apache-2.0"],
-      links: %{"GitHub" => @source_url},
-      files: ~w(lib mix.exs README.md LICENSE .formatter.exs)
+      links: %{
+        "GitHub" => @source_url,
+        "Changelog" => "#{@source_url}/blob/master/CHANGELOG.md"
+      },
+      files: ~w(lib mix.exs README.md LICENSE CHANGELOG.md .formatter.exs)
     ]
   end
 
@@ -89,7 +92,7 @@ defmodule Archiviste.MixProject do
       source_url: @source_url,
       extras: [
         "README.md",
-        "docs/superpowers/specs/2026-05-19-archiviste-api-design.md"
+        "CHANGELOG.md"
       ]
     ]
   end
