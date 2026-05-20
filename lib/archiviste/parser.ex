@@ -164,7 +164,7 @@ defmodule Archiviste.Parser do
         0 ->
           case Reader.read(reader, 4) do
             {:ok, _} -> :ok = Reader.consume_pending_skip(reader, 4)
-            :eof -> :ok
+            :eof -> raise Archiviste.Error.TruncatedFileError, offset: Reader.offset(reader)
           end
 
           {:halt, 0}
@@ -178,7 +178,7 @@ defmodule Archiviste.Parser do
               {[bytes], remaining - n}
 
             :eof ->
-              {:halt, remaining}
+              raise Archiviste.Error.TruncatedFileError, offset: Reader.offset(reader)
           end
       end,
       fn _ -> :ok end

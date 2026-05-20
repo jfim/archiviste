@@ -166,4 +166,30 @@ defmodule ArchivisteTest do
       [good <> bad] |> Archiviste.stream!(strict: true) |> Enum.to_list()
     end
   end
+
+  test "strict: truncated payload raises TruncatedFileError when consumed" do
+    full = WarcFixture.record(type: "response", payload: "abcdefghij")
+    truncated = binary_part(full, 0, byte_size(full) - 5)
+
+    assert_raise Archiviste.Error.TruncatedFileError, fn ->
+      [truncated]
+      |> Archiviste.stream!(strict: true)
+      |> Enum.map(&Archiviste.Record.read_payload/1)
+    end
+  end
+
+  test "lenient: truncated header is skipped with a log warning" do
+    full = WarcFixture.record(type: "response", payload: "abc")
+    truncated_header = binary_part(full, 0, 30)
+
+    import ExUnit.CaptureLog
+
+    {records, log} =
+      with_log(fn ->
+        [truncated_header] |> Archiviste.stream!() |> Enum.to_list()
+      end)
+
+    assert records == []
+    assert log =~ "malformed" or log =~ "truncated"
+  end
 end
