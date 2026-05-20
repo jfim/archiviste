@@ -15,7 +15,7 @@ defmodule Archiviste do
 
   require Logger
 
-  alias Archiviste.{Parser, Reader, Record, Error}
+  alias Archiviste.{Error, Parser, Reader, Record}
 
   @type opts :: [strict: boolean(), verify_digests: boolean()]
 
@@ -59,16 +59,7 @@ defmodule Archiviste do
               reason: reason
 
           {:error, reason, offset} ->
-            Logger.warning(
-              "Archiviste: skipped malformed record at offset #{offset}: #{inspect(reason)}"
-            )
-
-            :ok = Reader.clear_pending(reader)
-
-            case Reader.scan_to(reader, "WARC/") do
-              :ok -> {[], acc}
-              :eof -> {:halt, acc}
-            end
+            resync_lenient(reader, acc, reason, offset)
         end
       end,
       fn {reader, _} -> Reader.close(reader) end
@@ -90,6 +81,17 @@ defmodule Archiviste do
     raw
     |> maybe_gunzip(path)
     |> stream!(opts)
+  end
+
+  defp resync_lenient(reader, acc, reason, offset) do
+    Logger.warning("Archiviste: skipped malformed record at offset #{offset}: #{inspect(reason)}")
+
+    :ok = Reader.clear_pending(reader)
+
+    case Reader.scan_to(reader, "WARC/") do
+      :ok -> {[], acc}
+      :eof -> {:halt, acc}
+    end
   end
 
   defp maybe_gunzip(stream, path) do

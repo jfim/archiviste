@@ -214,22 +214,25 @@ defmodule Archiviste.Reader do
         <<_::binary-size(pos), rest::binary>> = state.buffer
         {:ok, %{state | buffer: rest, offset: state.offset + pos}}
 
-      :nomatch ->
-        if state.eof do
-          {:eof, %{state | buffer: <<>>, offset: state.offset + byte_size(state.buffer)}}
-        else
-          # Keep the last (marker_size - 1) bytes in case the marker
-          # straddles a chunk boundary.
-          keep = max(byte_size(state.buffer) - (marker_size - 1), 0)
-          drop = byte_size(state.buffer) - keep
-          <<_::binary-size(drop), tail::binary>> = state.buffer
-          state = %{state | buffer: tail, offset: state.offset + drop}
+      :nomatch when state.eof ->
+        {:eof, %{state | buffer: <<>>, offset: state.offset + byte_size(state.buffer)}}
 
-          case pull(state) do
-            {:ok, state} -> do_scan_to(state, marker, marker_size)
-            {:eof, state} -> do_scan_to(state, marker, marker_size)
-          end
-        end
+      :nomatch ->
+        do_scan_to_refill(state, marker, marker_size)
+    end
+  end
+
+  defp do_scan_to_refill(state, marker, marker_size) do
+    # Keep the last (marker_size - 1) bytes in case the marker
+    # straddles a chunk boundary.
+    keep = max(byte_size(state.buffer) - (marker_size - 1), 0)
+    drop = byte_size(state.buffer) - keep
+    <<_::binary-size(drop), tail::binary>> = state.buffer
+    state = %{state | buffer: tail, offset: state.offset + drop}
+
+    case pull(state) do
+      {:ok, state} -> do_scan_to(state, marker, marker_size)
+      {:eof, state} -> do_scan_to(state, marker, marker_size)
     end
   end
 end
