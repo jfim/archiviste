@@ -26,6 +26,7 @@ Count responses grouped by HTTP status code:
 |> Archiviste.stream_file!()
 |> Stream.filter(&(&1.type == :response))
 |> Archiviste.HTTP.parse_stream()
+|> Stream.filter(&match?(%Archiviste.HTTP.Response{}, &1))
 |> Enum.reduce(%{}, fn %Archiviste.HTTP.Response{status: status}, acc ->
   Map.update(acc, status, 1, &(&1 + 1))
 end)
