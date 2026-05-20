@@ -2,10 +2,14 @@ defmodule Archiviste.Record do
   @moduledoc """
   A single WARC record yielded by `Archiviste.stream!/2`.
 
-  The `:payload` field is a lazy `Stream.t()` of binary chunks. It is
-  **forward-only and single-pass** — reading consumes it. When the outer
-  record stream advances to the next record, any unconsumed payload bytes
-  are auto-drained.
+  The `:payload` field is an `Enumerable.t()` of binary chunks. It is
+  fully materialized in memory by the time the record is yielded, so the
+  record (and its payload) remain consumable after the outer record stream
+  terminates — for example, after `Enum.to_list/1` or `Stream.take/2`.
+
+  Tradeoff: each record's payload is buffered in memory. For very large
+  payloads this can be costly; a future version may spill large payloads
+  to a temporary file.
   """
 
   @type warc_type ::

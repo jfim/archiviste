@@ -178,8 +178,36 @@ defmodule Archiviste.Parser do
       # Eagerly read payload, verify digest, return replay stream or error.
       eager_verify_payload(reader, content_length, digest_header, record_id, record_offset)
     else
-      # Lazy streaming path — no digest verification.
-      {:ok, lazy_payload_stream(reader, content_length)}
+      # Eagerly read payload into memory and return a replay stream. Records
+      # yielded by `Archiviste.stream!/2` may outlive the underlying Reader
+      # (e.g., when consumers use `Enum.to_list/1` or `Stream.take/2` and
+      # then iterate payloads later), so the payload must be self-contained
+      # rather than a live GenServer-backed cursor.
+      #
+      # Tradeoff: this buffers each record's payload in memory. The
+      # historical "bounded memory across a single huge record" promise is
+      # weakened — bounded memory now means "across records, not across a
+      # single huge record". Future work: spill payloads larger than a
+      # threshold to a temp file.
+      eager_payload(reader, content_length)
+    end
+  end
+
+  defp eager_payload(reader, content_length) do
+    case read_all_payload(reader, content_length) do
+      {:ok, payload_bytes} ->
+        case Reader.read(reader, 4) do
+          {:ok, _} ->
+            :ok = Reader.consume_pending_skip(reader, content_length + 4)
+            {:ok, replay_stream(payload_bytes)}
+
+          :eof ->
+            raise Archiviste.Error.TruncatedFileError, offset: Reader.offset(reader)
+        end
+
+      {:eof, partial} ->
+        :ok = Reader.consume_pending_skip(reader, byte_size(partial))
+        raise Archiviste.Error.TruncatedFileError, offset: Reader.offset(reader)
     end
   end
 
@@ -259,37 +287,4 @@ defmodule Archiviste.Parser do
 
   defp replay_step(<<>>), do: {:halt, <<>>}
   defp replay_step(bytes), do: {[bytes], <<>>}
-
-  defp lazy_payload_stream(reader, content_length) do
-    chunk_size = 64 * 1024
-
-    Stream.resource(
-      fn -> content_length end,
-      fn
-        0 ->
-          case Reader.read(reader, 4) do
-            {:ok, _} ->
-              :ok = Reader.consume_pending_skip(reader, 4)
-
-            :eof ->
-              raise Archiviste.Error.TruncatedFileError, offset: Reader.offset(reader)
-          end
-
-          {:halt, 0}
-
-        remaining ->
-          n = min(chunk_size, remaining)
-
-          case Reader.read(reader, n) do
-            {:ok, bytes} ->
-              :ok = Reader.consume_pending_skip(reader, n)
-              {[bytes], remaining - n}
-
-            :eof ->
-              raise Archiviste.Error.TruncatedFileError, offset: Reader.offset(reader)
-          end
-      end,
-      fn _ -> :ok end
-    )
-  end
 end
