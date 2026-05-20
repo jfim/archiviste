@@ -22,9 +22,10 @@ defmodule Archiviste do
 
   This is the core API. For files, see `stream_file!/2`.
 
-  Each yielded `Archiviste.Record`'s `:payload` is a buffered stream whose
-  bytes have already been read from the underlying source. This means payloads
-  remain readable even after the outer record stream is exhausted.
+  Each yielded `Archiviste.Record`'s `:payload` is a lazy `Stream.t()` of
+  binary chunks. Its lifetime is bounded by this outer stream — consume
+  payloads inside the pipeline (e.g., with `Stream.map`) before exhausting
+  the outer stream with `Enum.to_list/1` or similar.
 
   ## Options
 
@@ -43,10 +44,6 @@ defmodule Archiviste do
       fn reader ->
         case Parser.next_record(reader) do
           {:ok, %Record{} = record} ->
-            # Eagerly buffer the payload so it remains readable after the
-            # outer stream (and its Reader process) have been closed.
-            buffered = record.payload |> Enum.to_list() |> IO.iodata_to_binary()
-            record = %Record{record | payload: [buffered]}
             {[record], reader}
 
           :eof ->

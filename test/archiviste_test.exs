@@ -31,7 +31,14 @@ defmodule ArchivisteTest do
       |> Enum.chunk_every(7)
       |> Enum.map(&IO.iodata_to_binary([&1]))
 
-    records = chunks |> Archiviste.stream!() |> Enum.to_list()
+    records =
+      chunks
+      |> Archiviste.stream!()
+      |> Stream.map(fn record ->
+        %{record | payload: [Record.read_payload(record)]}
+      end)
+      |> Enum.to_list()
+
     assert Enum.map(records, & &1.type) == [:warcinfo, :response]
     assert Enum.map(records, &Archiviste.Record.read_payload/1) == ["hello", "world"]
   end
@@ -47,6 +54,9 @@ defmodule ArchivisteTest do
       [bytes]
       |> Archiviste.stream!()
       |> Stream.filter(&(&1.type == :response))
+      |> Stream.map(fn record ->
+        %{record | payload: [Record.read_payload(record)]}
+      end)
       |> Enum.to_list()
 
     assert Record.read_payload(resp) == "body"
