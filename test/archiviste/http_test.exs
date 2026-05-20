@@ -97,4 +97,29 @@ defmodule Archiviste.HTTPTest do
     cookies = for {"set-cookie", v} <- resp.headers, do: v
     assert cookies == ["a=1", "b=2"]
   end
+
+  test "parse_stream/1 replaces response/request records with parsed structs and passes others through" do
+    info = WarcFixture.record(type: "warcinfo", payload: "x")
+
+    resp_payload =
+      "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 5\r\n\r\nhello"
+
+    resp =
+      WarcFixture.record(
+        type: "response",
+        target_uri: "https://example.com/",
+        content_type: "application/http;msgtype=response",
+        payload: resp_payload
+      )
+
+    bytes = info <> resp
+
+    results =
+      [bytes]
+      |> Archiviste.stream!()
+      |> HTTP.parse_stream()
+      |> Enum.to_list()
+
+    assert [%Record{type: :warcinfo}, %HTTP.Response{status: 200}] = results
+  end
 end

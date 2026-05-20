@@ -59,6 +59,33 @@ defmodule Archiviste.HTTP do
 
   def parse(%Record{type: other}, _opts), do: {:error, {:unsupported_type, other}}
 
+  @doc """
+  A stream stage that parses the HTTP layer for `response` and `request`
+  records in an existing record stream, leaving other record types untouched.
+
+  Usage:
+
+      [bytes]
+      |> Archiviste.stream!()
+      |> HTTP.parse_stream()
+      |> Enum.to_list()
+
+  Accepts the same options as `parse/2`.
+  """
+  @spec parse_stream(Enumerable.t(), keyword()) :: Enumerable.t()
+  def parse_stream(enumerable, opts \\ []) do
+    Stream.map(enumerable, fn
+      %Record{type: t} = record when t in [:response, :request] ->
+        case parse(record, opts) do
+          {:ok, parsed} -> parsed
+          {:error, _reason} -> record
+        end
+
+      other ->
+        other
+    end)
+  end
+
   ## Internals
 
   @doc false
