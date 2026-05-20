@@ -91,7 +91,7 @@ defmodule Archiviste do
   """
   @spec stream_file!(Path.t(), opts()) :: Enumerable.t()
   def stream_file!(path, opts \\ []) when is_binary(path) do
-    raw = File.stream!(path, [], 64 * 1024)
+    raw = File.stream!(path, 64 * 1024)
 
     raw
     |> maybe_gunzip(path)
