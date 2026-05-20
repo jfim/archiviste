@@ -8,6 +8,8 @@ An Elixir library for reading [WARC](https://iipc.github.io/warc-specifications/
 
 ## Usage
 
+Take the first 10 successful HTTP responses from a WARC:
+
 ```elixir
 "crawl.warc.gz"
 |> Archiviste.stream_file!()
@@ -17,8 +19,21 @@ An Elixir library for reading [WARC](https://iipc.github.io/warc-specifications/
 |> Enum.take(10)
 ```
 
-See the [v1 API design spec](docs/superpowers/specs/2026-05-19-archiviste-api-design.md)
-for the full surface and semantics.
+Count responses grouped by HTTP status code:
+
+```elixir
+"crawl.warc.gz"
+|> Archiviste.stream_file!()
+|> Stream.filter(&(&1.type == :response))
+|> Archiviste.HTTP.parse_stream()
+|> Enum.reduce(%{}, fn %Archiviste.HTTP.Response{status: status}, acc ->
+  Map.update(acc, status, 1, &(&1 + 1))
+end)
+# => %{200 => 1842, 301 => 57, 404 => 12, 500 => 3}
+```
+
+Because everything is a `Stream`, both examples run in bounded memory
+regardless of WARC size.
 
 ## Optional dependencies
 
