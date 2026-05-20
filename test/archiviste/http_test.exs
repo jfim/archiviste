@@ -134,6 +134,40 @@ defmodule Archiviste.HTTPTest do
     assert byte_size(IO.iodata_to_binary(Enum.to_list(parsed.body))) == 80 * 1024
   end
 
+  test "decode_body: true decodes a gzipped response body" do
+    plain = "the gzipped body bytes"
+    gz = :zlib.gzip(plain)
+
+    http =
+      "HTTP/1.1 200 OK\r\n" <>
+        "Content-Encoding: gzip\r\n" <>
+        "Content-Length: #{byte_size(gz)}\r\n" <>
+        "\r\n" <> gz
+
+    record = response_record(http)
+
+    assert {:ok, resp} = HTTP.parse(record, decode_body: true)
+    assert resp.body_encoding == :gzip
+    assert IO.iodata_to_binary(Enum.to_list(resp.body)) == plain
+  end
+
+  test "decode_body: false (default) leaves body bytes raw" do
+    plain = "the gzipped body bytes"
+    gz = :zlib.gzip(plain)
+
+    http =
+      "HTTP/1.1 200 OK\r\n" <>
+        "Content-Encoding: gzip\r\n" <>
+        "Content-Length: #{byte_size(gz)}\r\n" <>
+        "\r\n" <> gz
+
+    record = response_record(http)
+
+    assert {:ok, resp} = HTTP.parse(record)
+    assert resp.body_encoding == :gzip
+    assert IO.iodata_to_binary(Enum.to_list(resp.body)) == gz
+  end
+
   test "parse_stream/1 replaces response/request records with parsed structs and passes others through" do
     info = WarcFixture.record(type: "warcinfo", payload: "x")
 

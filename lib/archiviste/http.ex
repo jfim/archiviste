@@ -9,6 +9,7 @@ defmodule Archiviste.HTTP do
   """
 
   alias Archiviste.{HTTP, Record}
+  alias Archiviste.HTTP.Decoder
 
   @doc """
   Parse an HTTP response or request record into an `HTTP.Response` or
@@ -25,9 +26,18 @@ defmodule Archiviste.HTTP do
           {:ok, HTTP.Response.t() | HTTP.Request.t()} | {:error, term()}
   def parse(record, opts \\ [])
 
-  def parse(%Record{type: :response} = record, _opts) do
+  def parse(%Record{type: :response} = record, opts) do
     with {:ok, head, body_stream} <- read_head_and_body_stream(record.payload),
          {:ok, %{version: v, status: s, reason: r}, headers} <- parse_response_head(head) do
+      encoding = announced_encoding(headers)
+
+      body =
+        if Keyword.get(opts, :decode_body, false) and encoding not in [nil, :identity] do
+          Decoder.decode_stream(body_stream, encoding)
+        else
+          body_stream
+        end
+
       {:ok,
        %HTTP.Response{
          record: record,
@@ -35,15 +45,24 @@ defmodule Archiviste.HTTP do
          reason: r,
          http_version: v,
          headers: headers,
-         body: body_stream,
-         body_encoding: announced_encoding(headers)
+         body: body,
+         body_encoding: encoding
        }}
     end
   end
 
-  def parse(%Record{type: :request} = record, _opts) do
+  def parse(%Record{type: :request} = record, opts) do
     with {:ok, head, body} <- read_head_and_body_stream(record.payload),
          {:ok, %{method: m, target: t, version: v}, headers} <- parse_request_head(head) do
+      encoding = announced_encoding(headers)
+
+      body =
+        if Keyword.get(opts, :decode_body, false) and encoding not in [nil, :identity] do
+          Decoder.decode_stream(body, encoding)
+        else
+          body
+        end
+
       {:ok,
        %HTTP.Request{
          record: record,
@@ -52,7 +71,7 @@ defmodule Archiviste.HTTP do
          http_version: v,
          headers: headers,
          body: body,
-         body_encoding: announced_encoding(headers)
+         body_encoding: encoding
        }}
     end
   end
