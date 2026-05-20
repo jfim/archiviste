@@ -13,7 +13,9 @@ defmodule Archiviste do
   `Stream.t()` of binary chunks. See `Archiviste.Record` for details.
   """
 
-  alias Archiviste.{Parser, Reader, Record}
+  require Logger
+
+  alias Archiviste.{Parser, Reader, Record, Error}
 
   @type opts :: [strict: boolean(), verify_digests: boolean()]
 
@@ -35,27 +37,41 @@ defmodule Archiviste do
       and payload digests; mismatches are treated as malformed records.
   """
   @spec stream!(Enumerable.t(), opts()) :: Enumerable.t()
-  def stream!(enumerable, _opts \\ []) do
+  def stream!(enumerable, opts \\ []) do
+    strict? = Keyword.get(opts, :strict, false)
+
     Stream.resource(
       fn ->
         {:ok, reader} = Reader.start_link(enumerable)
-        reader
+        {reader, strict?}
       end,
-      fn reader ->
+      fn {reader, strict?} = acc ->
         case Parser.next_record(reader) do
           {:ok, %Record{} = record} ->
-            {[record], reader}
+            {[record], acc}
 
           :eof ->
-            {:halt, reader}
+            {:halt, acc}
 
-          {:error, reason, offset} ->
-            raise Archiviste.Error.MalformedRecordError,
+          {:error, reason, offset} when strict? ->
+            raise Error.MalformedRecordError,
               offset: offset,
               reason: reason
+
+          {:error, reason, offset} ->
+            Logger.warning(
+              "Archiviste: skipped malformed record at offset #{offset}: #{inspect(reason)}"
+            )
+
+            :ok = Reader.clear_pending(reader)
+
+            case Reader.scan_to(reader, "WARC/") do
+              :ok -> {[], acc}
+              :eof -> {:halt, acc}
+            end
         end
       end,
-      fn reader -> Reader.close(reader) end
+      fn {reader, _} -> Reader.close(reader) end
     )
   end
 

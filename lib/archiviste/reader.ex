@@ -42,6 +42,11 @@ defmodule Archiviste.Reader do
   def drain_pending(pid),
     do: GenServer.call(pid, :drain_pending, :infinity)
 
+  def scan_to(pid, marker) when is_binary(marker),
+    do: GenServer.call(pid, {:scan_to, marker}, :infinity)
+
+  def clear_pending(pid), do: GenServer.call(pid, :clear_pending, :infinity)
+
   def close(pid), do: GenServer.stop(pid)
 
   ## Server
@@ -112,6 +117,14 @@ defmodule Archiviste.Reader do
     {result, state} = do_skip(state, state.pending_skip)
     {:reply, result, %{state | pending_skip: 0}}
   end
+
+  def handle_call({:scan_to, marker}, _from, state) do
+    {result, state} = do_scan_to(state, marker, byte_size(marker))
+    {:reply, result, state}
+  end
+
+  def handle_call(:clear_pending, _from, state),
+    do: {:reply, :ok, %{state | pending_skip: 0}}
 
   ## Internals
 
@@ -192,6 +205,31 @@ defmodule Archiviste.Reader do
     case pull(state) do
       {:ok, state} -> do_read_until(state, delim, delim_size)
       {:eof, state} -> do_read_until(state, delim, delim_size)
+    end
+  end
+
+  defp do_scan_to(state, marker, marker_size) do
+    case :binary.match(state.buffer, marker) do
+      {pos, ^marker_size} ->
+        <<_::binary-size(pos), rest::binary>> = state.buffer
+        {:ok, %{state | buffer: rest, offset: state.offset + pos}}
+
+      :nomatch ->
+        if state.eof do
+          {:eof, %{state | buffer: <<>>, offset: state.offset + byte_size(state.buffer)}}
+        else
+          # Keep the last (marker_size - 1) bytes in case the marker
+          # straddles a chunk boundary.
+          keep = max(byte_size(state.buffer) - (marker_size - 1), 0)
+          drop = byte_size(state.buffer) - keep
+          <<_::binary-size(drop), tail::binary>> = state.buffer
+          state = %{state | buffer: tail, offset: state.offset + drop}
+
+          case pull(state) do
+            {:ok, state} -> do_scan_to(state, marker, marker_size)
+            {:eof, state} -> do_scan_to(state, marker, marker_size)
+          end
+        end
     end
   end
 end

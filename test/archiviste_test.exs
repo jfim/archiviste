@@ -135,4 +135,35 @@ defmodule ArchivisteTest do
       File.rm(path)
     end
   end
+
+  test "lenient mode: malformed record is skipped, subsequent records yield" do
+    good1 = WarcFixture.record(type: "warcinfo", payload: "ok1")
+    # A malformed record: invalid version line.
+    bad = "WARC/garbage\r\n\r\n"
+    good2 = WarcFixture.record(type: "response", payload: "ok2")
+
+    bytes = good1 <> bad <> good2
+
+    import ExUnit.CaptureLog
+
+    {records, log} =
+      with_log(fn ->
+        [bytes]
+        |> Archiviste.stream!()
+        |> Stream.map(fn r -> %{r | payload: [Archiviste.Record.read_payload(r)]} end)
+        |> Enum.to_list()
+      end)
+
+    assert Enum.map(records, &Archiviste.Record.read_payload/1) == ["ok1", "ok2"]
+    assert log =~ "skipped malformed record"
+  end
+
+  test "strict mode: malformed record raises mid-stream" do
+    good = WarcFixture.record(type: "warcinfo", payload: "ok")
+    bad = "WARC/garbage\r\n\r\n"
+
+    assert_raise Archiviste.Error.MalformedRecordError, fn ->
+      [good <> bad] |> Archiviste.stream!(strict: true) |> Enum.to_list()
+    end
+  end
 end
