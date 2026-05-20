@@ -2,7 +2,7 @@ defmodule Archiviste.Parser do
   @moduledoc false
   # Pure WARC record parser driven by an Archiviste.Reader pid.
 
-  alias Archiviste.{Reader, Record}
+  alias Archiviste.{Digest, Reader, Record}
 
   @known_types ~w(warcinfo response request metadata resource revisit conversion continuation)
 
@@ -14,7 +14,7 @@ defmodule Archiviste.Parser do
     * `:eof` — clean end of stream
     * `{:error, reason, offset}` — malformed record at byte offset
   """
-  def next_record(reader_pid) do
+  def next_record(reader_pid, opts \\ []) do
     :ok = drain_or_warn(reader_pid)
     offset = Reader.offset(reader_pid)
 
@@ -26,7 +26,8 @@ defmodule Archiviste.Parser do
         with {:ok, version} <- read_version_line(reader_pid, offset),
              {:ok, headers} <- read_header_block(reader_pid, offset),
              {:ok, parsed} <- interpret_headers(headers, offset) do
-          payload_stream = build_payload_stream(reader_pid, parsed.content_length)
+          payload_stream =
+            build_payload_stream(reader_pid, parsed.content_length, headers, parsed.id, opts)
 
           record = %Record{
             version: version,
@@ -151,31 +152,46 @@ defmodule Archiviste.Parser do
     end
   end
 
-  defp build_payload_stream(reader, content_length) do
+  defp build_payload_stream(reader, content_length, headers, record_id, opts) do
     # Tell the reader how many bytes belong to the next record's payload +
     # trailing CRLF CRLF, so that if the caller doesn't consume the payload
     # we can drain it later.
     :ok = Reader.set_pending_skip(reader, content_length + 4)
     chunk_size = 64 * 1024
+    verify? = Keyword.get(opts, :verify_digests, false)
+
+    digest_ctx =
+      with true <- verify?,
+           {:ok, header} <- Map.fetch(headers, "warc-block-digest"),
+           {:ok, algo, expected} <- Digest.algo_from_header(header) do
+        {Digest.init(algo), expected, header}
+      else
+        _ -> nil
+      end
 
     Stream.resource(
-      fn -> content_length end,
+      fn -> {content_length, digest_ctx} end,
       fn
-        0 ->
+        {0, dctx} ->
           case Reader.read(reader, 4) do
-            {:ok, _} -> :ok = Reader.consume_pending_skip(reader, 4)
-            :eof -> raise Archiviste.Error.TruncatedFileError, offset: Reader.offset(reader)
+            {:ok, _} ->
+              :ok = Reader.consume_pending_skip(reader, 4)
+              verify_final(dctx, record_id)
+
+            :eof ->
+              raise Archiviste.Error.TruncatedFileError, offset: Reader.offset(reader)
           end
 
-          {:halt, 0}
+          {:halt, {0, nil}}
 
-        remaining ->
+        {remaining, dctx} ->
           n = min(chunk_size, remaining)
 
           case Reader.read(reader, n) do
             {:ok, bytes} ->
               :ok = Reader.consume_pending_skip(reader, n)
-              {[bytes], remaining - n}
+              new_dctx = update_dctx(dctx, bytes)
+              {[bytes], {remaining - n, new_dctx}}
 
             :eof ->
               raise Archiviste.Error.TruncatedFileError, offset: Reader.offset(reader)
@@ -183,5 +199,27 @@ defmodule Archiviste.Parser do
       end,
       fn _ -> :ok end
     )
+  end
+
+  defp update_dctx(nil, _), do: nil
+
+  defp update_dctx({state, expected, header}, bytes),
+    do: {Digest.update(state, bytes), expected, header}
+
+  defp verify_final(nil, _), do: :ok
+
+  defp verify_final({state, _expected, header}, record_id) do
+    actual = Digest.finalize_base32(state)
+    expected_clean = String.split(header, ":", parts: 2) |> List.last() |> String.trim()
+
+    if actual == expected_clean do
+      :ok
+    else
+      raise Archiviste.Error.DigestMismatchError,
+        record_id: record_id,
+        digest_kind: :block,
+        expected: header,
+        actual: "sha?:" <> actual
+    end
   end
 end

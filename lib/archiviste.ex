@@ -46,7 +46,7 @@ defmodule Archiviste do
         {reader, strict?}
       end,
       fn {reader, strict?} = acc ->
-        case Parser.next_record(reader) do
+        case Parser.next_record(reader, opts) do
           {:ok, %Record{} = record} ->
             {[record], acc}
 

@@ -192,4 +192,42 @@ defmodule ArchivisteTest do
     assert records == []
     assert log =~ "malformed" or log =~ "truncated"
   end
+
+  test "verify_digests: true verifies WARC-Block-Digest and passes on match" do
+    payload = "matched-payload"
+
+    digest =
+      "sha1:" <> (payload |> then(&:crypto.hash(:sha, &1)) |> Base.encode32(padding: false))
+
+    bytes =
+      WarcFixture.record(
+        type: "resource",
+        headers: [{"WARC-Block-Digest", digest}],
+        payload: payload
+      )
+
+    [read_payload] =
+      [bytes]
+      |> Archiviste.stream!(verify_digests: true)
+      |> Enum.map(&Archiviste.Record.read_payload/1)
+
+    assert read_payload == payload
+  end
+
+  test "strict + verify_digests: digest mismatch raises DigestMismatchError" do
+    payload = "actual-payload"
+
+    bytes =
+      WarcFixture.record(
+        type: "resource",
+        headers: [{"WARC-Block-Digest", "sha1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}],
+        payload: payload
+      )
+
+    assert_raise Archiviste.Error.DigestMismatchError, fn ->
+      [bytes]
+      |> Archiviste.stream!(strict: true, verify_digests: true)
+      |> Enum.map(&Archiviste.Record.read_payload/1)
+    end
+  end
 end
