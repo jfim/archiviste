@@ -231,6 +231,29 @@ defmodule ArchivisteTest do
     end
   end
 
+  test "lenient + verify_digests: digest mismatch is skipped with a log warning" do
+    payload = "actual-payload"
+
+    bytes =
+      WarcFixture.record(
+        type: "resource",
+        headers: [{"WARC-Block-Digest", "sha1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}],
+        payload: payload
+      )
+
+    import ExUnit.CaptureLog
+
+    {records, log} =
+      with_log(fn ->
+        [bytes]
+        |> Archiviste.stream!(verify_digests: true)
+        |> Enum.to_list()
+      end)
+
+    assert records == []
+    assert log =~ "digest_mismatch" or log =~ "digest"
+  end
+
   test "read_at!/3 reads a single record at a known offset (plain file)" do
     a = WarcFixture.record(type: "warcinfo", payload: "a")
     b = WarcFixture.record(type: "response", payload: "second")

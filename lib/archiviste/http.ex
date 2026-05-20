@@ -6,6 +6,14 @@ defmodule Archiviste.HTTP do
   headers + body) as their content block; `request` records carry a
   captured HTTP request analogously. `parse/2` decodes that inner HTTP
   message into a struct.
+
+  ## Header representation
+
+  The `:headers` field on `HTTP.Request` and `HTTP.Response` is a
+  **list of `{name, value}` pairs** (not a map). HTTP allows duplicate
+  header names (e.g. multiple `Set-Cookie` headers), so a list is
+  needed to preserve all values. This differs from `Record.headers`,
+  which is a `Map` (WARC headers must be unique within a record).
   """
 
   alias Archiviste.{HTTP, Record}

@@ -25,10 +25,16 @@ defmodule Archiviste.Parser do
       {:ok, _} ->
         with {:ok, version} <- read_version_line(reader_pid, offset),
              {:ok, headers} <- read_header_block(reader_pid, offset),
-             {:ok, parsed} <- interpret_headers(headers, offset) do
-          payload_stream =
-            build_payload_stream(reader_pid, parsed.content_length, headers, parsed.id, opts)
-
+             {:ok, parsed} <- interpret_headers(headers, offset),
+             {:ok, payload_stream} <-
+               build_payload_stream(
+                 reader_pid,
+                 parsed.content_length,
+                 headers,
+                 parsed.id,
+                 opts,
+                 offset
+               ) do
           record = %Record{
             version: version,
             type: parsed.type,
@@ -152,46 +158,132 @@ defmodule Archiviste.Parser do
     end
   end
 
-  defp build_payload_stream(reader, content_length, headers, record_id, opts) do
-    # Tell the reader how many bytes belong to the next record's payload +
-    # trailing CRLF CRLF, so that if the caller doesn't consume the payload
-    # we can drain it later.
+  # When verify_digests is true and the record has a WARC-Block-Digest header,
+  # eagerly read and buffer the entire payload to verify the digest before
+  # yielding the record. This means opting into verify_digests: true buffers
+  # each verified record's payload into memory (you can't verify a digest
+  # without seeing all the bytes).
+  #
+  # On match  → returns {:ok, replay_stream}
+  # On mismatch → returns {:error, {:digest_mismatch, ...}, offset} so the
+  #               caller can route through the normal lenient/strict logic.
+  defp build_payload_stream(reader, content_length, headers, record_id, opts, record_offset) do
     :ok = Reader.set_pending_skip(reader, content_length + 4)
-    chunk_size = 64 * 1024
     verify? = Keyword.get(opts, :verify_digests, false)
 
-    digest_ctx =
-      with true <- verify?,
-           {:ok, header} <- Map.fetch(headers, "warc-block-digest"),
-           {:ok, algo, expected} <- Digest.algo_from_header(header) do
-        {Digest.init(algo), expected, header}
-      else
-        _ -> nil
-      end
+    digest_header =
+      if verify?, do: Map.get(headers, "warc-block-digest"), else: nil
+
+    if verify? and not is_nil(digest_header) do
+      # Eagerly read payload, verify digest, return replay stream or error.
+      eager_verify_payload(reader, content_length, digest_header, record_id, record_offset)
+    else
+      # Lazy streaming path — no digest verification.
+      {:ok, lazy_payload_stream(reader, content_length)}
+    end
+  end
+
+  defp eager_verify_payload(reader, content_length, digest_header, record_id, record_offset) do
+    case read_all_payload(reader, content_length) do
+      {:ok, payload_bytes} ->
+        eager_verify_trailer(
+          reader,
+          content_length,
+          digest_header,
+          record_id,
+          record_offset,
+          payload_bytes
+        )
+
+      {:eof, partial} ->
+        # Truncated: consume what we have so the offset is accurate, then raise.
+        :ok = Reader.consume_pending_skip(reader, byte_size(partial))
+        raise Archiviste.Error.TruncatedFileError, offset: Reader.offset(reader)
+    end
+  end
+
+  defp eager_verify_trailer(
+         reader,
+         content_length,
+         digest_header,
+         record_id,
+         record_offset,
+         payload_bytes
+       ) do
+    case Reader.read(reader, 4) do
+      {:ok, _} ->
+        :ok = Reader.consume_pending_skip(reader, content_length + 4)
+        check_digest(digest_header, payload_bytes, record_id, record_offset)
+
+      :eof ->
+        raise Archiviste.Error.TruncatedFileError, offset: Reader.offset(reader)
+    end
+  end
+
+  defp check_digest(digest_header, payload_bytes, record_id, record_offset) do
+    case Digest.verify(digest_header, payload_bytes) do
+      :ok ->
+        {:ok, replay_stream(payload_bytes)}
+
+      {:error, :mismatch, expected_header, actual_encoded} ->
+        {:error, {:digest_mismatch, expected_header, actual_encoded, record_id}, record_offset}
+
+      {:error, :unknown_algorithm, _} ->
+        # Unknown algorithm — skip verification, return replay stream as-is.
+        {:ok, replay_stream(payload_bytes)}
+    end
+  end
+
+  defp replay_stream(payload_bytes) do
+    Stream.resource(fn -> payload_bytes end, &replay_step/1, fn _ -> :ok end)
+  end
+
+  defp read_all_payload(reader, content_length) do
+    read_all_payload(reader, content_length, <<>>)
+  end
+
+  defp read_all_payload(_reader, 0, acc), do: {:ok, acc}
+
+  defp read_all_payload(reader, remaining, acc) do
+    chunk_size = min(64 * 1024, remaining)
+
+    case Reader.read(reader, chunk_size) do
+      {:ok, bytes} ->
+        :ok = Reader.consume_pending_skip(reader, chunk_size)
+        read_all_payload(reader, remaining - chunk_size, acc <> bytes)
+
+      :eof ->
+        {:eof, acc}
+    end
+  end
+
+  defp replay_step(<<>>), do: {:halt, <<>>}
+  defp replay_step(bytes), do: {[bytes], <<>>}
+
+  defp lazy_payload_stream(reader, content_length) do
+    chunk_size = 64 * 1024
 
     Stream.resource(
-      fn -> {content_length, digest_ctx} end,
+      fn -> content_length end,
       fn
-        {0, dctx} ->
+        0 ->
           case Reader.read(reader, 4) do
             {:ok, _} ->
               :ok = Reader.consume_pending_skip(reader, 4)
-              verify_final(dctx, record_id)
 
             :eof ->
               raise Archiviste.Error.TruncatedFileError, offset: Reader.offset(reader)
           end
 
-          {:halt, {0, nil}}
+          {:halt, 0}
 
-        {remaining, dctx} ->
+        remaining ->
           n = min(chunk_size, remaining)
 
           case Reader.read(reader, n) do
             {:ok, bytes} ->
               :ok = Reader.consume_pending_skip(reader, n)
-              new_dctx = update_dctx(dctx, bytes)
-              {[bytes], {remaining - n, new_dctx}}
+              {[bytes], remaining - n}
 
             :eof ->
               raise Archiviste.Error.TruncatedFileError, offset: Reader.offset(reader)
@@ -199,27 +291,5 @@ defmodule Archiviste.Parser do
       end,
       fn _ -> :ok end
     )
-  end
-
-  defp update_dctx(nil, _), do: nil
-
-  defp update_dctx({state, expected, header}, bytes),
-    do: {Digest.update(state, bytes), expected, header}
-
-  defp verify_final(nil, _), do: :ok
-
-  defp verify_final({state, _expected, header}, record_id) do
-    actual = Digest.finalize_base32(state)
-    expected_clean = String.split(header, ":", parts: 2) |> List.last() |> String.trim()
-
-    if actual == expected_clean do
-      :ok
-    else
-      raise Archiviste.Error.DigestMismatchError,
-        record_id: record_id,
-        digest_kind: :block,
-        expected: header,
-        actual: "sha?:" <> actual
-    end
   end
 end

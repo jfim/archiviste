@@ -24,8 +24,9 @@ defmodule Archiviste do
       `Archiviste.Error.MalformedRecordError` mid-stream. When `false`,
       they are skipped with a `Logger.warning`.
     * `:verify_digests` (default `false`) — verify `WARC-Block-Digest`
-      while streaming payload chunks. Mismatch raises
-      `Archiviste.Error.DigestMismatchError` (subject to `:strict`).
+      for each record. Mismatch is treated as a malformed record (subject
+      to `:strict`). When `:verify_digests` is true, each verified
+      record's payload is buffered in memory.
   """
 
   require Logger
@@ -48,8 +49,10 @@ defmodule Archiviste do
 
     * `:strict` (default `false`) — when `true`, malformed records raise
       mid-stream instead of being skipped with a `Logger.warning`.
-    * `:verify_digests` (default `false`) — when `true`, verify WARC block
-      and payload digests; mismatches are treated as malformed records.
+    * `:verify_digests` (default `false`) — when `true`, verify the WARC
+      block digest for each record; mismatches are treated as malformed
+      records (subject to `:strict`). When `:verify_digests` is true,
+      each verified record's payload is buffered in memory.
   """
   @spec stream!(Enumerable.t(), opts()) :: Enumerable.t()
   def stream!(enumerable, opts \\ []) do
@@ -67,6 +70,13 @@ defmodule Archiviste do
 
           :eof ->
             {:halt, acc}
+
+          {:error, {:digest_mismatch, expected, actual, record_id}, _offset} when strict? ->
+            raise Error.DigestMismatchError,
+              record_id: record_id,
+              digest_kind: :block,
+              expected: expected,
+              actual: actual
 
           {:error, reason, offset} when strict? ->
             raise Error.MalformedRecordError,
@@ -117,6 +127,7 @@ defmodule Archiviste do
           case IO.binread(io, 64 * 1024) do
             :eof -> {:halt, io}
             data when is_binary(data) -> {[data], io}
+            {:error, reason} -> raise File.Error, reason: reason, action: "read", path: path
           end
         end,
         fn io -> File.close(io) end
