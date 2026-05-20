@@ -230,4 +230,44 @@ defmodule ArchivisteTest do
       |> Enum.map(&Archiviste.Record.read_payload/1)
     end
   end
+
+  test "read_at!/3 reads a single record at a known offset (plain file)" do
+    a = WarcFixture.record(type: "warcinfo", payload: "a")
+    b = WarcFixture.record(type: "response", payload: "second")
+    bytes = a <> b
+
+    path = Path.join(System.tmp_dir!(), "archiviste_test_at_#{System.unique_integer([:positive])}.warc")
+    File.write!(path, bytes)
+
+    try do
+      offset = byte_size(a)
+      record = Archiviste.read_at!(path, offset)
+      assert record.type == :response
+      assert Archiviste.Record.read_payload(record) == "second"
+    after
+      File.rm(path)
+    end
+  end
+
+  test "read_at!/3 reads a single record at a known offset (.warc.gz file)" do
+    a = WarcFixture.record(type: "warcinfo", payload: "a")
+    b = WarcFixture.record(type: "response", payload: "second")
+    a_gz = WarcFixture.gzip(a)
+    b_gz = WarcFixture.gzip(b)
+    bytes = a_gz <> b_gz
+
+    path =
+      Path.join(System.tmp_dir!(), "archiviste_test_at_#{System.unique_integer([:positive])}.warc.gz")
+
+    File.write!(path, bytes)
+
+    try do
+      offset = byte_size(a_gz)
+      record = Archiviste.read_at!(path, offset)
+      assert record.type == :response
+      assert Archiviste.Record.read_payload(record) == "second"
+    after
+      File.rm(path)
+    end
+  end
 end

@@ -83,6 +83,52 @@ defmodule Archiviste do
     |> stream!(opts)
   end
 
+  @doc """
+  Read exactly one record starting at a given byte offset in `path`.
+
+  Works on both plain `.warc` files and per-record-gzipped `.warc.gz` files.
+  For `.warc.gz`, the offset must point to the start of a gzip member
+  (record-aligned).
+  """
+  @spec read_at!(Path.t(), non_neg_integer(), opts()) :: Archiviste.Record.t()
+  def read_at!(path, offset, opts \\ []) when is_binary(path) and offset >= 0 do
+    {:ok, io} = File.open(path, [:read, :binary])
+    {:ok, _} = :file.position(io, offset)
+
+    stream =
+      Stream.resource(
+        fn -> io end,
+        fn io ->
+          case IO.binread(io, 64 * 1024) do
+            :eof -> {:halt, io}
+            data when is_binary(data) -> {[data], io}
+          end
+        end,
+        fn io -> File.close(io) end
+      )
+
+    decoded =
+      if gzip?(path), do: Archiviste.Gzip.decode_stream(stream), else: stream
+
+    # Eagerly read the payload *inside* the stream pipeline so the Reader
+    # GenServer is still alive when the inner payload stream is consumed.
+    # Callers wanting laziness should use stream_file!/2 with their own
+    # filtering — read_at!/3 is the random-access primitive.
+    result =
+      decoded
+      |> stream!(opts)
+      |> Stream.map(fn record ->
+        payload_bytes = Archiviste.Record.read_payload(record)
+        %{record | payload: [payload_bytes]}
+      end)
+      |> Enum.take(1)
+
+    case result do
+      [record] -> record
+      [] -> raise Archiviste.Error.TruncatedFileError, offset: offset
+    end
+  end
+
   defp resync_lenient(reader, acc, reason, offset) do
     Logger.warning("Archiviste: skipped malformed record at offset #{offset}: #{inspect(reason)}")
 
