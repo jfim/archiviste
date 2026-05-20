@@ -85,6 +85,24 @@ defmodule Archiviste.HTTPTest do
     assert Enum.to_list(resp.body) == []
   end
 
+  test "parse/2 tolerates a missing reason phrase in the status line" do
+    # Some servers/proxies emit `HTTP/1.1 200\r\n` (no trailing SP, no
+    # reason phrase). Real-world parsers accept this; we do too.
+    http = "HTTP/1.1 200\r\nServer: x\r\n\r\n"
+    record = response_record(http)
+    assert {:ok, resp} = HTTP.parse(record)
+    assert resp.status == 200
+    assert resp.reason == ""
+  end
+
+  test "parse/2 tolerates an empty reason phrase with trailing SP" do
+    http = "HTTP/1.1 200 \r\nServer: x\r\n\r\n"
+    record = response_record(http)
+    assert {:ok, resp} = HTTP.parse(record)
+    assert resp.status == 200
+    assert resp.reason == ""
+  end
+
   test "parse/2 preserves duplicate headers as separate list entries" do
     http =
       "HTTP/1.1 200 OK\r\n" <>
