@@ -53,6 +53,7 @@ defmodule Archiviste.MixProject do
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
       {:excoveralls, "~> 0.18", only: :test},
+      {:stream_data, "~> 1.1", only: :test},
       {:brotli, "~> 0.3", optional: true},
       {:ezstd, "~> 1.0", optional: true}
     ]
