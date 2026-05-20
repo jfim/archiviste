@@ -1,9 +1,35 @@
 # Archiviste
 
-An Elixir library for reading and writing [WARC](https://iipc.github.io/warc-specifications/) (Web ARChive) files.
+An Elixir library for reading [WARC](https://iipc.github.io/warc-specifications/)
+(Web ARChive) files. Streaming-first; bounded memory for any size of WARC.
 
 > [!WARNING]
-> Pre-alpha. The API is being designed and will change.
+> Pre-1.0. The API may change before tagging `1.0.0`.
+
+## Usage
+
+```elixir
+"crawl.warc.gz"
+|> Archiviste.stream_file!()
+|> Stream.filter(&(&1.type == :response))
+|> Archiviste.HTTP.parse_stream(decode_body: true)
+|> Stream.filter(&match?(%Archiviste.HTTP.Response{status: 200}, &1))
+|> Enum.take(10)
+```
+
+See the [v1 API design spec](docs/superpowers/specs/2026-05-19-archiviste-api-design.md)
+for the full surface and semantics.
+
+## Optional dependencies
+
+Add these to your own `mix.exs` to enable extra HTTP body decoders:
+
+| Encoding | Dep                       |
+| -------- | ------------------------- |
+| `br`     | `{:brotli, "~> 0.3"}`     |
+| `zstd`   | `{:ezstd, "~> 1.0"}`      |
+
+`gzip` and `deflate` work out of the box (stdlib `:zlib`).
 
 ## Development
 
@@ -11,21 +37,3 @@ An Elixir library for reading and writing [WARC](https://iipc.github.io/warc-spe
 mix deps.get
 mix check    # format, compile (warnings-as-errors), credo, tests
 ```
-
-## Installation
-
-If [available in Hex](https://hex.pm/docs/publish), the package can be installed
-by adding `archiviste` to your list of dependencies in `mix.exs`:
-
-```elixir
-def deps do
-  [
-    {:archiviste, "~> 0.1.0"}
-  ]
-end
-```
-
-Documentation can be generated with [ExDoc](https://github.com/elixir-lang/ex_doc)
-and published on [HexDocs](https://hexdocs.pm). Once published, the docs can
-be found at <https://hexdocs.pm/archiviste>.
-

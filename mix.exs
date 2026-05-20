@@ -87,7 +87,10 @@ defmodule Archiviste.MixProject do
       main: "Archiviste",
       source_ref: "v#{@version}",
       source_url: @source_url,
-      extras: ["README.md"]
+      extras: [
+        "README.md",
+        "docs/superpowers/specs/2026-05-19-archiviste-api-design.md"
+      ]
     ]
   end
 end

@@ -4,13 +4,28 @@ defmodule Archiviste do
 
   ## Quick start
 
+      # plain or per-record-gzipped .warc / .warc.gz
       "crawl.warc.gz"
       |> Archiviste.stream_file!()
       |> Stream.filter(&(&1.type == :response))
-      |> Enum.take(10)
+      |> Stream.take(10)
+      |> Enum.to_list()
 
-  Each yielded record is an `Archiviste.Record` whose `:payload` is a lazy
-  `Stream.t()` of binary chunks. See `Archiviste.Record` for details.
+  Each record is an `Archiviste.Record` whose `:payload` is a lazy
+  `Stream.t()` of binary chunks. See `Archiviste.Record` for details
+  on the payload contract.
+
+  For HTTP-level parsing of `response` and `request` records, see
+  `Archiviste.HTTP`.
+
+  ## Options
+
+    * `:strict` (default `false`) — when `true`, malformed records raise
+      `Archiviste.Error.MalformedRecordError` mid-stream. When `false`,
+      they are skipped with a `Logger.warning`.
+    * `:verify_digests` (default `false`) — verify `WARC-Block-Digest`
+      while streaming payload chunks. Mismatch raises
+      `Archiviste.Error.DigestMismatchError` (subject to `:strict`).
   """
 
   require Logger
