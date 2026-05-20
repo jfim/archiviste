@@ -61,4 +61,19 @@ defmodule Archiviste do
       fn reader -> Reader.close(reader) end
     )
   end
+
+  @doc """
+  Stream WARC records from a file path.
+
+  Detects per-record gzip compression from the `.gz` extension or from the
+  gzip magic bytes at the start of the file.
+
+  Accepts the same options as `stream!/2`.
+  """
+  @spec stream_file!(Path.t(), opts()) :: Enumerable.t()
+  def stream_file!(path, opts \\ []) when is_binary(path) do
+    path
+    |> File.stream!([], 64 * 1024)
+    |> stream!(opts)
+  end
 end
